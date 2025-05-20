@@ -6,15 +6,20 @@ import os
 import pandas as pd
 import argparse
 
-# List of AWS account IDs you want to check access to
-start_url = 'https://????????.awsapps.com/start' # Change start URL
-region = 'us-east-1'
-accepted_roles = ['SSO-RoleName-1', 'SSO-RoleName-2', 'SSO-RoleName-3']
+# Modify
+start_url = 'https://xxxxx.awsapps.com/start/#'
+region = 'us-xxxx-x'
+accepted_roles = ['rolename1', 'rolename2', 'rolename3']
+
+######## Do not touch ########
+auth_region_name="us-east-1" #
+##############################
+# SSO runs in us-east-1
 
 
 def configure_session(start_url):
     session = Session()
-    sso_oidc = session.client('sso-oidc')
+    sso_oidc = session.client('sso-oidc', region_name=auth_region_name)
     client_creds = sso_oidc.register_client(
         clientName='listEc2Instances', 
         clientType='public',
@@ -51,7 +56,7 @@ def configure_session(start_url):
 def get_accounts_ids(access_token):
 
     try:
-        sso_client = boto3.client('sso')
+        sso_client = boto3.client('sso', region_name=auth_region_name)
         paginator = sso_client.get_paginator('list_accounts')
         
         account_ids = []
@@ -72,7 +77,7 @@ def get_accounts_ids(access_token):
 
 
 def get_sso_credentials(access_token, account_id, accepted_roles):
-    sso_client = boto3.client('sso')
+    sso_client = boto3.client('sso', region_name=auth_region_name,)
     role_name = ''
 
     # Get list of roles for the account
@@ -112,7 +117,7 @@ def get_sso_credentials(access_token, account_id, accepted_roles):
 
 def describe_instance_properties(session, instance_id):
     try:
-        ssm_client = session.client('ssm')
+        ssm_client = session.client('ssm', region_name=region)
 
         response = ssm_client.describe_instance_information(
             InstanceInformationFilterList=[
@@ -133,7 +138,7 @@ def describe_instance_properties(session, instance_id):
 
 def list_ec2_instances_in_account(session, account_id, account_name, csv_file_name):
     try:
-        ec2_client = session.client('ec2')
+        ec2_client = session.client('ec2', region_name=region)
         paginator = ec2_client.get_paginator('describe_instances')
 
         instances = []
@@ -147,18 +152,6 @@ def list_ec2_instances_in_account(session, account_id, account_name, csv_file_na
                 for instance in Reservation['Instances']:
                     instance_properties = describe_instance_properties(session, instance['InstanceId'])
 
-                    ProjectName = ''
-                    Environment = ''
-                    ApplicationCode = ''
-                    if 'Tags' in instance:
-                        for tag in instance['Tags']:
-                            if tag['Key'] == 'banistmo:project-name':
-                                ProjectName = tag['Value']
-                            if tag['Key'] == 'banistmo:tec:environment-type':
-                                Environment = tag['Value']
-                            if tag['Key'] == 'banistmo:application-code':
-                                ApplicationCode = tag['Value']
-
                     desired_states = ['running', 'stopped', 'pending', 'stopping']
                     if instance['State']['Name'] in desired_states:
                         new_data = {
@@ -168,19 +161,19 @@ def list_ec2_instances_in_account(session, account_id, account_name, csv_file_na
                             'PlatformVersion': instance_properties['InstanceInformationList'][0]['PlatformVersion'] if instance_properties['InstanceInformationList'] and "PlatformVersion" in instance_properties['InstanceInformationList'][0] != "" else "",
                             'ImageId': instance['ImageId'],
                             'State': instance['State']['Name'],
-                            'ProjectName': ProjectName if ProjectName != "" else 'No tag',
-                            'Environment': Environment if Environment != "" else 'No tag',
-                            'ApplicationCode': ApplicationCode if ApplicationCode != "" else 'No tag',
                             'ASG': RequesterId if RequesterId != "" else 'na',
                             'IPAddress': instance_properties['InstanceInformationList'][0]['IPAddress'] if instance_properties['InstanceInformationList'] else instance['PrivateIpAddress'],
                             'Hostname': instance_properties['InstanceInformationList'][0]['ComputerName'] if instance_properties['InstanceInformationList'] else instance['PrivateDnsName'],
-                            'SSM': 'Si' if instance_properties['InstanceInformationList'] else 'No'
+                            'SSM': 'Si' if instance_properties['InstanceInformationList'] else 'No',
+                            'SecurityId': instance["NetworkInterfaces"][0]["Groups"][0]["GroupId"] if instance["NetworkInterfaces"][0]["Groups"][0]["GroupId"] else 'na',
+                            'SecurityName': instance["NetworkInterfaces"][0]["Groups"][0]["GroupName"] if instance["NetworkInterfaces"][0]["Groups"][0]["GroupName"] else 'na',
+                            'InstanceRegion': region
                         }
                         instances.append(new_data)
 
         csv_file = f'./{csv_file_name}'
-        columns = ['Account Name', 'Account Number', 'Instance Id', 'Platform Type', 'Platform Name', 'Platform Version',
-                   'Image Id', 'State', 'ProjectName', 'Environment', 'ApplicationCode', 'ASG', 'IPAddress', 'Hostname', 'SSM']
+        columns = ['AccountName', 'AccountId', 'InstanceId', 'PlatformType', 'PlatformName', 'PlatformVersion',
+                   'ImageId', 'State', 'ASG', 'IPAddress', 'Hostname', 'SSM', "SecurityId", "SecurityName", "InstanceRegion"]
 
         save_instance_tocsv(account_id, account_name, csv_file, columns, instances)
     except Exception as e:
@@ -207,8 +200,8 @@ def save_instance_tocsv(account_id, account_name, csv_file, columns, instances):
         for instance in instances:
             mode = 'w' if header else 'a'
             df = pd.DataFrame([[account_name, account_id, instance['InstanceId'], instance['PlatformType'], instance['PlatformName'], instance['PlatformVersion'],
-                                instance['ImageId'], instance['State'], instance['ProjectName'], instance['Environment'], instance['ApplicationCode'],
-                                 instance['ASG'], instance['IPAddress'], instance['Hostname'], instance['SSM'] ]],
+                                instance['ImageId'], instance['State'], instance['ASG'], instance['IPAddress'], 
+                                instance['Hostname'], instance['SSM'], instance['SecurityId'], instance['SecurityName'],  instance['InstanceRegion']]],
                                 columns=columns)
             df.to_csv(csv_file, encoding='utf-8', mode=mode, header=header, index=False)
             header = False
